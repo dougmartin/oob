@@ -1,0 +1,7 @@
+# Built binary
+/oob
+/dist/
+
+# Go
+*.test
+*.out
