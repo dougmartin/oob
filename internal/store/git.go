@@ -43,6 +43,19 @@ func detectBranch(cwd string) string {
 	return "detached/unknown"
 }
 
+// LiveBranches returns the local branch names in the repository at cwd, as
+// reported by `git for-each-ref refs/heads`.
+func LiveBranches(cwd string) ([]string, error) {
+	out, err := gitOutput(cwd, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 func gitOutput(cwd string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = cwd

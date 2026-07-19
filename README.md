@@ -76,12 +76,42 @@ Claude will use the MCP tools below instead of writing into the repo.
 | `oob_delete` | Delete a file; empty parent dirs are pruned.                  |
 | `oob_search` | Case-insensitive content search across one or all namespaces. |
 
+### Targeting another repo or branch
+
+By default the `repo` and `branch` namespaces resolve from the working directory
+of the running server (one fixed location for the session — check it with
+`oob_info`). When you're working across several repos in a single session, every
+CRUD tool also accepts optional `repo` and `branch` arguments to override that:
+
+- "Write a **branch** oob note for repo `billing-api` on branch `feature/PROJ-42`…"
+- "List the **repo** oob files for `web-frontend`."
+
+`repo` alone applies to both the `repo` and `branch` namespaces; `branch` applies
+to the `branch` namespace. Whatever you don't override still falls back to the
+detected git context, so within a single repo you never need to pass them.
+
+## `oob prune`
+
+Reconcile the `branch` namespace against a repository's live branches. Run it
+from inside a git repo; any directory under `~/oob/branches/<repo>/` whose branch
+no longer exists (per `git for-each-ref refs/heads`) is reported.
+
+```bash
+oob prune            # dry run: list stale branch directories
+oob prune --delete   # remove them
+```
+
+It's a dry run by default, and only the current repository is pruned — oob stores
+repos by name and needs the live branch list from the real git repo to reconcile
+safely. Directories for a live branch, and shared parent dirs (e.g. `feature/`
+when `feature/foo` still exists), are preserved.
+
 ## `oob serve`
 
 Runs the MCP server over stdio. This is what `oob init` registers; you normally
 don't invoke it directly. It resolves `repo`/`branch` from its working
 directory, so it must run from inside the target repository (Claude Code does
-this for you).
+this for you) — or pass the `repo`/`branch` tool arguments to target another.
 
 ## Development
 
@@ -94,7 +124,7 @@ make fmt
 Layout:
 
 - `main.go` — entry point
-- `cmd/` — cobra commands (`root`, `init`, `serve`)
-- `internal/store/` — namespace resolution, git detection, filesystem CRUD
+- `cmd/` — cobra commands (`root`, `init`, `serve`, `prune`)
+- `internal/store/` — namespace resolution, git detection, filesystem CRUD, prune
 - `internal/setup/` — `init` host configuration (dirs, MCP registration, CLAUDE.md)
 - `internal/mcpserver/` — MCP tool definitions over the store

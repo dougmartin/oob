@@ -24,6 +24,7 @@ The 'oob serve' command runs an MCP server exposing these files to Claude Code.`
 	}
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newServeCmd())
+	root.AddCommand(newPruneCmd())
 	return root
 }
 

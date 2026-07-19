@@ -106,25 +106,56 @@ func (s *Store) gitContext() (*GitContext, error) {
 	return s.git(wd)
 }
 
+// Ref optionally overrides the git-detected repo and/or branch used to resolve
+// the repo and branch namespaces. Empty fields fall back to detection from the
+// server's working directory, so the zero Ref means "detect everything".
+type Ref struct {
+	Repo   string
+	Branch string
+}
+
+// resolveRef determines the repo and branch names for a namespace, honouring
+// any overrides in ref and falling back to git detection for the rest. It only
+// touches git when a needed value was not supplied.
+func (s *Store) resolveRef(namespace string, ref Ref) (repo, branch string, err error) {
+	repo = strings.TrimSpace(ref.Repo)
+	branch = strings.TrimSpace(ref.Branch)
+	needRepo := namespace == NamespaceRepo || namespace == NamespaceBranch
+	needBranch := namespace == NamespaceBranch
+	if (needRepo && repo == "") || (needBranch && branch == "") {
+		gc, gerr := s.gitContext()
+		if gerr != nil {
+			return "", "", gerr
+		}
+		if repo == "" {
+			repo = gc.RepoName
+		}
+		if branch == "" {
+			branch = gc.Branch
+		}
+	}
+	return repo, branch, nil
+}
+
 // NamespaceDir returns the directory backing the given namespace, resolving
-// git context for repo/branch namespaces.
-func (s *Store) NamespaceDir(namespace string) (string, error) {
+// git context (or ref overrides) for repo/branch namespaces.
+func (s *Store) NamespaceDir(namespace string, ref Ref) (string, error) {
 	switch namespace {
 	case NamespaceGlobal:
 		return s.GlobalDir(), nil
 	case NamespaceRepo:
-		gc, err := s.gitContext()
+		repo, _, err := s.resolveRef(namespace, ref)
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(s.ReposDir(), gc.RepoName), nil
+		return safeJoin(s.ReposDir(), repo)
 	case NamespaceBranch:
-		gc, err := s.gitContext()
+		repo, branch, err := s.resolveRef(namespace, ref)
 		if err != nil {
 			return "", err
 		}
 		// Branch may contain slashes (e.g. feature/foo); keep them nested.
-		return filepath.Join(s.BranchesDir(), gc.RepoName, filepath.FromSlash(gc.Branch)), nil
+		return safeJoin(s.BranchesDir(), filepath.Join(repo, filepath.FromSlash(branch)))
 	default:
 		return "", fmt.Errorf("%w: %q (want one of %s)", ErrBadNamespace, namespace, strings.Join(Namespaces, ", "))
 	}
@@ -140,8 +171,8 @@ var (
 
 // resolve returns the absolute filesystem path for a namespace-relative path,
 // guarding against traversal outside the namespace directory.
-func (s *Store) resolve(namespace, rel string) (base, full string, err error) {
-	base, err = s.NamespaceDir(namespace)
+func (s *Store) resolve(namespace, rel string, ref Ref) (base, full string, err error) {
+	base, err = s.NamespaceDir(namespace, ref)
 	if err != nil {
 		return "", "", err
 	}
@@ -178,14 +209,14 @@ type Entry struct {
 // List returns the files under a namespace (optionally scoped to subpath),
 // recursively, sorted by path. A missing namespace directory yields an empty
 // list rather than an error.
-func (s *Store) List(namespace, subpath string) ([]Entry, error) {
-	base, err := s.NamespaceDir(namespace)
+func (s *Store) List(namespace, subpath string, ref Ref) ([]Entry, error) {
+	base, err := s.NamespaceDir(namespace, ref)
 	if err != nil {
 		return nil, err
 	}
 	root := base
 	if strings.TrimSpace(subpath) != "" {
-		if _, root, err = s.resolve(namespace, subpath); err != nil {
+		if _, root, err = s.resolve(namespace, subpath, ref); err != nil {
 			return nil, err
 		}
 	}
@@ -228,8 +259,8 @@ func (s *Store) List(namespace, subpath string) ([]Entry, error) {
 }
 
 // Read returns the contents of a namespace file.
-func (s *Store) Read(namespace, path string) (string, error) {
-	_, full, err := s.resolve(namespace, path)
+func (s *Store) Read(namespace, path string, ref Ref) (string, error) {
+	_, full, err := s.resolve(namespace, path, ref)
 	if err != nil {
 		return "", err
 	}
@@ -246,8 +277,8 @@ func (s *Store) Read(namespace, path string) (string, error) {
 // Write creates or updates a namespace file, creating parent directories as
 // needed. When createOnly is true, it fails if the file already exists.
 // It reports whether a new file was created.
-func (s *Store) Write(namespace, path, content string, createOnly bool) (created bool, err error) {
-	_, full, err := s.resolve(namespace, path)
+func (s *Store) Write(namespace, path, content string, createOnly bool, ref Ref) (created bool, err error) {
+	_, full, err := s.resolve(namespace, path, ref)
 	if err != nil {
 		return false, err
 	}
@@ -267,8 +298,8 @@ func (s *Store) Write(namespace, path, content string, createOnly bool) (created
 
 // Delete removes a namespace file and prunes now-empty parent directories up to
 // (but not including) the namespace root.
-func (s *Store) Delete(namespace, path string) error {
-	base, full, err := s.resolve(namespace, path)
+func (s *Store) Delete(namespace, path string, ref Ref) error {
+	base, full, err := s.resolve(namespace, path, ref)
 	if err != nil {
 		return err
 	}
@@ -304,7 +335,7 @@ type Match struct {
 // Search scans file contents for query (case-insensitive substring). When
 // namespace is empty, all namespaces are searched. maxResults caps the number
 // of hits (<= 0 means no cap).
-func (s *Store) Search(namespace, query string, maxResults int) ([]Match, error) {
+func (s *Store) Search(namespace, query string, maxResults int, ref Ref) ([]Match, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("%w: query is empty", ErrBadPath)
@@ -320,7 +351,7 @@ func (s *Store) Search(namespace, query string, maxResults int) ([]Match, error)
 
 	var matches []Match
 	for _, ns := range namespaces {
-		base, err := s.NamespaceDir(ns)
+		base, err := s.NamespaceDir(ns, ref)
 		if err != nil {
 			// Skip repo/branch namespaces when outside a git repo during an
 			// all-namespace search; surface the error for a targeted search.

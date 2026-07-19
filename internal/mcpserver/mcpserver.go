@@ -32,11 +32,23 @@ func Serve(ctx context.Context, s *store.Store) error {
 	return New(s).Run(ctx, &mcp.StdioTransport{})
 }
 
-const namespaceDoc = "Namespace: 'global' (shared across all repos), 'repo' (the current git repository), or 'branch' (the current repo + branch). repo and branch are resolved from the server's working directory."
+const namespaceDoc = "Namespace: 'global' (shared across all repos), 'repo' (the current git repository), or 'branch' (the current repo + branch). repo and branch default to the git repository of the server's working directory; override them with the 'repo'/'branch' arguments to target a different repository or branch."
+
+// overrideRepoDoc and overrideBranchDoc document the optional ref overrides
+// shared by the repo/branch-aware tools.
+const (
+	overrideRepoDoc   = "optional: repository name to target instead of the one detected from the working directory (applies to the repo and branch namespaces)"
+	overrideBranchDoc = "optional: branch name to target instead of the current branch (applies to the branch namespace); may contain slashes"
+)
+
+// ref builds a store.Ref from the shared override fields.
+func ref(repo, branch string) store.Ref { return store.Ref{Repo: repo, Branch: branch} }
 
 type listInput struct {
 	Namespace string `json:"namespace" jsonschema:"the namespace to list; one of global, repo, branch"`
 	Subpath   string `json:"subpath,omitempty" jsonschema:"optional subdirectory (relative to the namespace) to scope the listing"`
+	Repo      string `json:"repo,omitempty" jsonschema:"optional: repository name to target instead of the one detected from the working directory (applies to the repo and branch namespaces)"`
+	Branch    string `json:"branch,omitempty" jsonschema:"optional: branch name to target instead of the current branch (applies to the branch namespace); may contain slashes"`
 }
 
 type listOutput struct {
@@ -48,6 +60,8 @@ type listOutput struct {
 type readInput struct {
 	Namespace string `json:"namespace" jsonschema:"one of global, repo, branch"`
 	Path      string `json:"path" jsonschema:"file path relative to the namespace"`
+	Repo      string `json:"repo,omitempty" jsonschema:"optional: repository name to target instead of the one detected from the working directory (applies to the repo and branch namespaces)"`
+	Branch    string `json:"branch,omitempty" jsonschema:"optional: branch name to target instead of the current branch (applies to the branch namespace); may contain slashes"`
 }
 
 type readOutput struct {
@@ -61,6 +75,8 @@ type writeInput struct {
 	Path       string `json:"path" jsonschema:"file path relative to the namespace; parent directories are created as needed"`
 	Content    string `json:"content" jsonschema:"the full file contents to write"`
 	CreateOnly bool   `json:"create_only,omitempty" jsonschema:"when true, fail if the file already exists instead of overwriting"`
+	Repo       string `json:"repo,omitempty" jsonschema:"optional: repository name to target instead of the one detected from the working directory (applies to the repo and branch namespaces)"`
+	Branch     string `json:"branch,omitempty" jsonschema:"optional: branch name to target instead of the current branch (applies to the branch namespace); may contain slashes"`
 }
 
 type writeOutput struct {
@@ -72,6 +88,8 @@ type writeOutput struct {
 type deleteInput struct {
 	Namespace string `json:"namespace" jsonschema:"one of global, repo, branch"`
 	Path      string `json:"path" jsonschema:"file path relative to the namespace"`
+	Repo      string `json:"repo,omitempty" jsonschema:"optional: repository name to target instead of the one detected from the working directory (applies to the repo and branch namespaces)"`
+	Branch    string `json:"branch,omitempty" jsonschema:"optional: branch name to target instead of the current branch (applies to the branch namespace); may contain slashes"`
 }
 
 type deleteOutput struct {
@@ -84,6 +102,8 @@ type searchInput struct {
 	Query      string `json:"query" jsonschema:"case-insensitive substring to search for in file contents"`
 	Namespace  string `json:"namespace,omitempty" jsonschema:"optional namespace to limit the search (global, repo, branch); omit to search all"`
 	MaxResults int    `json:"max_results,omitempty" jsonschema:"maximum number of matches to return (default 100)"`
+	Repo       string `json:"repo,omitempty" jsonschema:"optional: repository name to target instead of the one detected from the working directory (applies to the repo and branch namespaces)"`
+	Branch     string `json:"branch,omitempty" jsonschema:"optional: branch name to target instead of the current branch (applies to the branch namespace); may contain slashes"`
 }
 
 type searchOutput struct {
@@ -112,11 +132,12 @@ func register(srv *mcp.Server, s *store.Store) {
 		Name:        "oob_list",
 		Description: "List out-of-band (oob) files in a namespace, recursively. " + namespaceDoc,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listInput) (*mcp.CallToolResult, listOutput, error) {
-		dir, err := s.NamespaceDir(in.Namespace)
+		r := ref(in.Repo, in.Branch)
+		dir, err := s.NamespaceDir(in.Namespace, r)
 		if err != nil {
 			return toolErr[listOutput](err)
 		}
-		files, err := s.List(in.Namespace, in.Subpath)
+		files, err := s.List(in.Namespace, in.Subpath, r)
 		if err != nil {
 			return toolErr[listOutput](err)
 		}
@@ -133,7 +154,7 @@ func register(srv *mcp.Server, s *store.Store) {
 		Name:        "oob_read",
 		Description: "Read the contents of an oob file. " + namespaceDoc,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in readInput) (*mcp.CallToolResult, readOutput, error) {
-		content, err := s.Read(in.Namespace, in.Path)
+		content, err := s.Read(in.Namespace, in.Path, ref(in.Repo, in.Branch))
 		if err != nil {
 			return toolErr[readOutput](err)
 		}
@@ -144,7 +165,7 @@ func register(srv *mcp.Server, s *store.Store) {
 		Name:        "oob_write",
 		Description: "Create or overwrite an oob file with the given contents (upsert). Set create_only to fail if it already exists. " + namespaceDoc,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in writeInput) (*mcp.CallToolResult, writeOutput, error) {
-		created, err := s.Write(in.Namespace, in.Path, in.Content, in.CreateOnly)
+		created, err := s.Write(in.Namespace, in.Path, in.Content, in.CreateOnly, ref(in.Repo, in.Branch))
 		if err != nil {
 			return toolErr[writeOutput](err)
 		}
@@ -160,7 +181,7 @@ func register(srv *mcp.Server, s *store.Store) {
 		Name:        "oob_delete",
 		Description: "Delete an oob file. Empty parent directories are pruned. " + namespaceDoc,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deleteInput) (*mcp.CallToolResult, deleteOutput, error) {
-		if err := s.Delete(in.Namespace, in.Path); err != nil {
+		if err := s.Delete(in.Namespace, in.Path, ref(in.Repo, in.Branch)); err != nil {
 			return toolErr[deleteOutput](err)
 		}
 		return text(fmt.Sprintf("deleted %s/%s", in.Namespace, in.Path)),
@@ -175,7 +196,7 @@ func register(srv *mcp.Server, s *store.Store) {
 		if max == 0 {
 			max = 100
 		}
-		matches, err := s.Search(in.Namespace, in.Query, max)
+		matches, err := s.Search(in.Namespace, in.Query, max, ref(in.Repo, in.Branch))
 		if err != nil {
 			return toolErr[searchOutput](err)
 		}
