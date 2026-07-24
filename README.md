@@ -75,6 +75,31 @@ Claude will use the MCP tools below instead of writing into the repo.
 | `oob_write`  | Create or overwrite a file (`create_only` to fail if exists). |
 | `oob_delete` | Delete a file; empty parent dirs are pruned.                  |
 | `oob_search` | Case-insensitive content search across one or all namespaces. |
+| `oob_path`   | Resolve a file's absolute path (it need not exist yet).       |
+
+### Editing in place instead of rewriting
+
+oob files are ordinary files on a local filesystem, and this server is a thin
+wrapper over them: no index, no locking, no validation, and `oob_search` scans
+the files live. Editing a file directly is therefore exactly equivalent to
+editing it through the server.
+
+That matters for agents, which otherwise re-emit an entire document through
+`oob_write` to change one line — wasteful and prone to transcription drift. The
+server's MCP instructions and tool descriptions say so explicitly, and
+`oob_read`, `oob_write`, `oob_search` and `oob_path` all return an `abs_path`:
+
+- **Targeted edit of an existing file** — take its `abs_path` and use your normal
+  Read/Edit tools on it.
+- **Creating a file, or replacing one wholesale** — use `oob_write`; it creates
+  parent directories, and `create_only` guards against clobbering.
+- **Discovery, or a client with no filesystem access** — use `oob_list`,
+  `oob_read`, `oob_search`, `oob_delete`.
+
+`oob_path` resolves a path without requiring the file to exist, so it also
+answers "where should I create this?". Prefer it over composing paths by hand:
+it stays correct across a moved `OOB_HOME`, the repo-name derivation, and branch
+names containing slashes.
 
 ### Targeting another repo or branch
 

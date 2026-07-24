@@ -140,6 +140,33 @@ func TestPathTraversalContained(t *testing.T) {
 	}
 }
 
+func TestAbsPath(t *testing.T) {
+	s := newTestStore(t)
+	// Resolves without the file existing, so callers can plan a new file.
+	got, err := s.AbsPath(NamespaceBranch, "notes/plan.md", Ref{})
+	if err != nil {
+		t.Fatalf("AbsPath: %v", err)
+	}
+	want := filepath.Join(s.Home, "branches", "myrepo", "feature", "foo", "notes", "plan.md")
+	if got != want {
+		t.Errorf("AbsPath = %s, want %s", got, want)
+	}
+	if _, err := os.Stat(got); !os.IsNotExist(err) {
+		t.Errorf("AbsPath created something on disk: %v", err)
+	}
+	// Overrides and traversal guards behave as they do elsewhere.
+	got, err = s.AbsPath(NamespaceRepo, "a.txt", Ref{Repo: "other"})
+	if err != nil {
+		t.Fatalf("AbsPath override: %v", err)
+	}
+	if want := filepath.Join(s.Home, "repos", "other", "a.txt"); got != want {
+		t.Errorf("AbsPath override = %s, want %s", got, want)
+	}
+	if _, err := s.AbsPath(NamespaceGlobal, "  ", Ref{}); !errors.Is(err, ErrBadPath) {
+		t.Errorf("empty path err = %v, want ErrBadPath", err)
+	}
+}
+
 func TestSearch(t *testing.T) {
 	s := newTestStore(t)
 	mustWrite(t, s, NamespaceGlobal, "g.txt", "alpha beta\nGAMMA line\n")
@@ -151,6 +178,17 @@ func TestSearch(t *testing.T) {
 	}
 	if len(matches) != 2 {
 		t.Fatalf("Search all = %d matches, want 2: %+v", len(matches), matches)
+	}
+
+	// Each match carries an absolute path callers can edit directly.
+	for _, m := range matches {
+		want, err := s.AbsPath(m.Namespace, m.Path, Ref{})
+		if err != nil {
+			t.Fatalf("AbsPath(%s/%s): %v", m.Namespace, m.Path, err)
+		}
+		if m.AbsPath != want {
+			t.Errorf("match AbsPath = %s, want %s", m.AbsPath, want)
+		}
 	}
 
 	// Scoped search + maxResults cap.

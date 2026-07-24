@@ -24,7 +24,7 @@ const claudeMdBody = `## Out-of-band (oob) files
 An MCP server named ` + "`oob`" + ` manages **out-of-band files** — cross-repo and
 cross-branch scratch/temp files that must NOT be committed into any git repo.
 Whenever I mention an "oob file" (or "out of band" file), use the ` + "`oob`" + ` MCP
-tools (` + "`oob_list`, `oob_read`, `oob_write`, `oob_delete`, `oob_search`, `oob_info`" + `)
+tools (` + "`oob_list`, `oob_read`, `oob_write`, `oob_delete`, `oob_search`, `oob_info`, `oob_path`" + `)
 rather than writing into the working tree.
 
 There are three namespaces:
@@ -34,7 +34,16 @@ There are three namespaces:
 - **branch** — scoped to the current repository *and* branch. "Create a branch oob file for…"
 
 The repo and branch namespaces are resolved automatically from the current
-working directory, so you do not need to name the repo or branch.`
+working directory, so you do not need to name the repo or branch.
+
+oob files are **plain files on disk**, not opaque blobs behind the MCP, and the
+server is a thin filesystem wrapper (no index, no locking, ` + "`oob_search`" + ` scans
+live). So for a **targeted edit of an existing file, use the normal Read/Edit
+tools** on its absolute path rather than re-writing the whole file through
+` + "`oob_write`" + `. Get that path from ` + "`oob_path`" + ` (it resolves files that don't exist
+yet, too) or from the ` + "`abs_path`" + ` already returned by ` + "`oob_read`" + `, ` + "`oob_write`" + ` and
+` + "`oob_search`" + `. Never hardcode oob paths. Use ` + "`oob_write`" + ` to create a file or
+replace one wholesale.`
 
 // BinaryPath returns the absolute, symlink-resolved path to the running oob
 // binary, suitable for registering as a durable MCP command.

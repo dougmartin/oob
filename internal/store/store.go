@@ -161,6 +161,14 @@ func (s *Store) NamespaceDir(namespace string, ref Ref) (string, error) {
 	}
 }
 
+// AbsPath returns the absolute filesystem path a namespace-relative path maps
+// to. The file need not exist, so callers can use it to decide where to create
+// one. Parent directories are not created.
+func (s *Store) AbsPath(namespace, path string, ref Ref) (string, error) {
+	_, full, err := s.resolve(namespace, path, ref)
+	return full, err
+}
+
 // Sentinel errors returned by the store.
 var (
 	ErrBadNamespace = errors.New("invalid namespace")
@@ -328,6 +336,7 @@ func pruneEmptyDirs(dir, stopAt string) {
 type Match struct {
 	Namespace string `json:"namespace"`
 	Path      string `json:"path"` // namespace-relative, slash-separated
+	AbsPath   string `json:"abs_path"`
 	Line      int    `json:"line"`
 	Text      string `json:"text"`
 }
@@ -408,6 +417,7 @@ func searchDir(namespace, base, needle string, maxResults int, out *[]Match) err
 				*out = append(*out, Match{
 					Namespace: namespace,
 					Path:      relSlash,
+					AbsPath:   path,
 					Line:      lineNo,
 					Text:      strings.TrimSpace(line),
 				})
