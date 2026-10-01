@@ -13,7 +13,7 @@ var ErrNotInRepo = errors.New("not inside a git repository")
 // GitContext describes the repository containing a working directory.
 type GitContext struct {
 	RepoRoot string // absolute path to the repo top level
-	RepoName string // basename of RepoRoot
+	RepoName string // name of the main repository, shared by all its worktrees
 	Branch   string // current branch, or detached/<short-sha> when detached
 }
 
@@ -26,9 +26,19 @@ func DetectGit(cwd string) (*GitContext, error) {
 	branch := detectBranch(cwd)
 	return &GitContext{
 		RepoRoot: root,
-		RepoName: filepath.Base(root),
+		RepoName: repoName(cwd, root),
 		Branch:   branch,
 	}, nil
+}
+
+// repoName is the directory holding the common .git dir, so linked worktrees
+// share their main repository's name; bare repos and submodules use root's.
+func repoName(cwd, root string) string {
+	common, err := gitOutput(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err == nil && filepath.Base(common) == ".git" {
+		return filepath.Base(filepath.Dir(common))
+	}
+	return filepath.Base(root)
 }
 
 // detectBranch returns the current branch name, or a "detached/<short-sha>"

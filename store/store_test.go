@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -238,5 +239,74 @@ func mustWrite(t *testing.T, s *Store, ns, path, content string) {
 	t.Helper()
 	if _, err := s.Write(ns, path, content, false, Ref{}); err != nil {
 		t.Fatalf("Write(%s/%s): %v", ns, path, err)
+	}
+}
+
+func TestSearchSkipsEnvAndBinaryFiles(t *testing.T) {
+	s := newTestStore(t)
+	mustWrite(t, s, NamespaceGlobal, "notes.md", "secret word\n")
+	mustWrite(t, s, NamespaceGlobal, "creds.env", "secret=1\n")
+	mustWrite(t, s, NamespaceGlobal, "app/.env", "secret=2\n")
+	mustWrite(t, s, NamespaceGlobal, "blob.bin", "secret\x00\x01\n")
+	late := strings.Repeat("a", binarySniffLen) + "\x00\nsecret late\n"
+	mustWrite(t, s, NamespaceGlobal, "late-nul.txt", late)
+
+	matches, err := s.Search(NamespaceGlobal, "secret", 0, Ref{})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	got := map[string]bool{}
+	for _, m := range matches {
+		got[m.Path] = true
+	}
+	if len(matches) != 2 || !got["notes.md"] || !got["late-nul.txt"] {
+		t.Fatalf("Search = %+v, want hits in notes.md and late-nul.txt only", matches)
+	}
+}
+
+func TestSearchAll(t *testing.T) {
+	s := newTestStore(t)
+	mustWrite(t, s, NamespaceGlobal, "g.md", "needle global\n")
+	mustWrite(t, s, NamespaceRepo, "r.md", "needle myrepo\n")
+	if _, err := s.Write(NamespaceRepo, "o.md", "needle other\n", false, Ref{Repo: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write(NamespaceBranch, "deep/b.md", "needle branch\n", false, Ref{Repo: "other", Branch: "feature/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write(NamespaceRepo, "secret.env", "needle\n", false, Ref{Repo: "other"}); err != nil {
+		t.Fatal(err)
+	}
+	s.git = func(string) (*GitContext, error) { return nil, ErrNotInRepo }
+
+	matches, err := s.SearchAll("NEEDLE", 0)
+	if err != nil {
+		t.Fatalf("SearchAll: %v", err)
+	}
+	type hit struct{ ns, repo, path string }
+	want := map[hit]bool{
+		{NamespaceGlobal, "", "g.md"}:                     true,
+		{NamespaceRepo, "myrepo", "r.md"}:                 true,
+		{NamespaceRepo, "other", "o.md"}:                  true,
+		{NamespaceBranch, "other", "feature/x/deep/b.md"}: true,
+	}
+	if len(matches) != len(want) {
+		t.Fatalf("SearchAll = %d matches, want %d: %+v", len(matches), len(want), matches)
+	}
+	for _, m := range matches {
+		if !want[hit{m.Namespace, m.Repo, m.Path}] {
+			t.Errorf("unexpected match %+v", m)
+		}
+		if _, err := os.Stat(m.AbsPath); err != nil {
+			t.Errorf("AbsPath %s: %v", m.AbsPath, err)
+		}
+	}
+
+	capped, err := s.SearchAll("needle", 2)
+	if err != nil || len(capped) != 2 {
+		t.Fatalf("capped SearchAll = %+v err=%v", capped, err)
+	}
+	if _, err := s.SearchAll("  ", 0); !errors.Is(err, ErrBadPath) {
+		t.Errorf("empty query err = %v, want ErrBadPath", err)
 	}
 }
