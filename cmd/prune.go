@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dougmartin/oob/internal/store"
+	"github.com/dougmartin/oob/store"
 )
 
 func newPruneCmd() *cobra.Command {

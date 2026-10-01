@@ -13,6 +13,7 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -335,21 +336,28 @@ func pruneEmptyDirs(dir, stopAt string) {
 // Match is a single search hit.
 type Match struct {
 	Namespace string `json:"namespace"`
-	Path      string `json:"path"` // namespace-relative, slash-separated
-	AbsPath   string `json:"abs_path"`
-	Line      int    `json:"line"`
-	Text      string `json:"text"`
+	// Repo is set by SearchAll for repo and branch namespace hits.
+	Repo string `json:"repo,omitempty"`
+	// Path is namespace-relative and slash-separated. For branch namespace hits
+	// from SearchAll it starts with the branch name, which may itself contain
+	// slashes, so callers split it using the branch names they know.
+	Path    string `json:"path"`
+	AbsPath string `json:"abs_path"`
+	Line    int    `json:"line"`
+	Text    string `json:"text"`
 }
+
+// binarySniffLen bytes are checked for a NUL to detect binary files.
+const binarySniffLen = 8 * 1024
 
 // Search scans file contents for query (case-insensitive substring). When
 // namespace is empty, all namespaces are searched. maxResults caps the number
-// of hits (<= 0 means no cap).
+// of hits (<= 0 means no cap). Files named *.env and binary files are skipped.
 func (s *Store) Search(namespace, query string, maxResults int, ref Ref) ([]Match, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil, fmt.Errorf("%w: query is empty", ErrBadPath)
+	needle, err := searchNeedle(query)
+	if err != nil {
+		return nil, err
 	}
-	needle := strings.ToLower(query)
 
 	var namespaces []string
 	if namespace == "" {
@@ -369,7 +377,7 @@ func (s *Store) Search(namespace, query string, maxResults int, ref Ref) ([]Matc
 			}
 			return nil, err
 		}
-		if err := searchDir(ns, base, needle, maxResults, &matches); err != nil {
+		if err := searchDir(ns, "", base, needle, maxResults, &matches); err != nil {
 			return nil, err
 		}
 		if maxResults > 0 && len(matches) >= maxResults {
@@ -379,7 +387,54 @@ func (s *Store) Search(namespace, query string, maxResults int, ref Ref) ([]Matc
 	return matches, nil
 }
 
-func searchDir(namespace, base, needle string, maxResults int, out *[]Match) error {
+// SearchAll is Search across every stored namespace rather than the ones the
+// working directory resolves to: the global root, every repo under the repos
+// root, and every branch under the branches root. It never consults git.
+func (s *Store) SearchAll(query string, maxResults int) ([]Match, error) {
+	needle, err := searchNeedle(query)
+	if err != nil {
+		return nil, err
+	}
+	var matches []Match
+	if err := searchDir(NamespaceGlobal, "", s.GlobalDir(), needle, maxResults, &matches); err != nil {
+		return nil, err
+	}
+	for _, root := range []struct{ namespace, dir string }{
+		{NamespaceRepo, s.ReposDir()},
+		{NamespaceBranch, s.BranchesDir()},
+	} {
+		repos, err := os.ReadDir(root.dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		for _, r := range repos {
+			if !r.IsDir() {
+				continue
+			}
+			if maxResults > 0 && len(matches) >= maxResults {
+				return matches, nil
+			}
+			dir := filepath.Join(root.dir, r.Name())
+			if err := searchDir(root.namespace, r.Name(), dir, needle, maxResults, &matches); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return matches, nil
+}
+
+func searchNeedle(query string) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", fmt.Errorf("%w: query is empty", ErrBadPath)
+	}
+	return strings.ToLower(query), nil
+}
+
+func searchDir(namespace, repo, base, needle string, maxResults int, out *[]Match) error {
 	info, err := os.Stat(base)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -394,7 +449,7 @@ func searchDir(namespace, base, needle string, maxResults int, out *[]Match) err
 		if walkErr != nil {
 			return walkErr
 		}
-		if d.IsDir() {
+		if d.IsDir() || strings.HasSuffix(d.Name(), ".env") {
 			return nil
 		}
 		if maxResults > 0 && len(*out) >= maxResults {
@@ -405,9 +460,13 @@ func searchDir(namespace, base, needle string, maxResults int, out *[]Match) err
 			return err
 		}
 		defer f.Close()
+		r := bufio.NewReaderSize(f, binarySniffLen)
+		if head, _ := r.Peek(binarySniffLen); bytes.IndexByte(head, 0) >= 0 {
+			return nil
+		}
 		rel, _ := filepath.Rel(base, path)
 		relSlash := filepath.ToSlash(rel)
-		scanner := bufio.NewScanner(f)
+		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		lineNo := 0
 		for scanner.Scan() {
@@ -416,6 +475,7 @@ func searchDir(namespace, base, needle string, maxResults int, out *[]Match) err
 			if strings.Contains(strings.ToLower(line), needle) {
 				*out = append(*out, Match{
 					Namespace: namespace,
+					Repo:      repo,
 					Path:      relSlash,
 					AbsPath:   path,
 					Line:      lineNo,

@@ -9,7 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dougmartin/oob/internal/store"
+	"github.com/dougmartin/oob/store"
 )
 
 // Version is the reported server/tool version.
@@ -263,7 +263,7 @@ func register(srv *mcp.Server, s *store.Store) {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "oob_search",
-		Description: "Search oob file contents for a case-insensitive substring across one or all namespaces. Returns matching file paths, absolute paths, line numbers, and line text. " + editDoc,
+		Description: "Search oob file contents for a case-insensitive substring across one or all namespaces, skipping *.env and binary files. Returns matching file paths, absolute paths, line numbers, and line text. " + editDoc,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchInput) (*mcp.CallToolResult, searchOutput, error) {
 		max := in.MaxResults
 		if max == 0 {

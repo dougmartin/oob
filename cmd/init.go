@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dougmartin/oob/internal/setup"
-	"github.com/dougmartin/oob/internal/store"
+	"github.com/dougmartin/oob/store"
 )
 
 func newInitCmd() *cobra.Command {

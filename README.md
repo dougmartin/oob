@@ -12,7 +12,8 @@ Files live under `~/oob` in three namespaces:
 | `repo`    | `~/oob/repos/<repo>/…`                | the current git repository              |
 | `branch`  | `~/oob/branches/<repo>/<branch>/…`    | the current repository **and** branch   |
 
-`<repo>` is the basename of the git repository root; `<branch>` mirrors git's
+`<repo>` is the name of the main repository's directory, so a linked worktree
+shares its repository's namespace; `<branch>` mirrors git's
 own layout, so `feature/foo` nests as `feature/foo/`. The `repo` and `branch`
 namespaces are resolved from the working directory of the running server — no
 need to name the repo or branch.
@@ -74,7 +75,7 @@ Claude will use the MCP tools below instead of writing into the repo.
 | `oob_read`   | Read a file's contents.                                       |
 | `oob_write`  | Create or overwrite a file (`create_only` to fail if exists). |
 | `oob_delete` | Delete a file; empty parent dirs are pruned.                  |
-| `oob_search` | Case-insensitive content search across one or all namespaces. |
+| `oob_search` | Case-insensitive content search across one or all namespaces, skipping `*.env` and binary files. |
 | `oob_path`   | Resolve a file's absolute path (it need not exist yet).       |
 
 ### Editing in place instead of rewriting
@@ -150,6 +151,7 @@ Layout:
 
 - `main.go` — entry point
 - `cmd/` — cobra commands (`root`, `init`, `serve`, `prune`)
-- `internal/store/` — namespace resolution, git detection, filesystem CRUD, prune
+- `store/` — namespace resolution, git detection, filesystem CRUD, search, prune;
+  importable by other modules as `github.com/dougmartin/oob/store`
 - `internal/setup/` — `init` host configuration (dirs, MCP registration, CLAUDE.md)
 - `internal/mcpserver/` — MCP tool definitions over the store
